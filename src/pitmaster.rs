@@ -25,8 +25,9 @@ pub struct State {
     pub valve_pos: u16,
     pub error: i32,
     pub target_temp_raw: u16,
-    pub graph_tick_cnt: u8
+    pub graph_tick_cnt: u8,
 }
+
 impl State {
     pub fn new() -> State {
         State {
@@ -36,13 +37,17 @@ impl State {
             valve_pos: 65535,
             error: 0,
             target_temp_raw: max6675::f_to_raw(225),
-            graph_tick_cnt: GRAPH_STEP_TICKS
+            graph_tick_cnt: GRAPH_STEP_TICKS,
         }
     }
     pub fn on_temp_read(&mut self, new_temp_raw: u16) {
         // average temperature
-        self.avg_buffer.push(new_temp_raw);
-        let mut t_avg = 0; // multiplied by avg buffer size to preserve precision
+        if self.avg_buffer.is_empty() {
+            self.avg_buffer.fill(new_temp_raw);
+        } else {
+            self.avg_buffer.push(new_temp_raw);
+        }
+        let mut t_avg: i32 = 0; // multiplied by avg buffer size to preserve precision
         for t in self.avg_buffer.iter() {
             t_avg += *t as i32;
         }
@@ -59,30 +64,28 @@ impl State {
             let valve_pos = self.valve_pos as i32 + valve_d;
             self.valve_pos = valve_pos as u16;
         }
-        if self.graph_tick_cnt >= GRAPH_STEP_TICKS {
+        if self.temp_history.is_empty() || self.graph_tick_cnt >= GRAPH_STEP_TICKS {
             self.temp_history.push(t_avg as u16);
             self.valve_history.push(self.valve_pos);
-            self.graph_tick_cnt = 0;
+            self.graph_tick_cnt = 1;
         } else {
             *(self.temp_history.back_mut().unwrap()) = t_avg as u16;
             *(self.valve_history.back_mut().unwrap()) = self.valve_pos;
             self.graph_tick_cnt += 1;
         }
-
     }
     pub fn valve_pwm_duty(&self) -> u16 {
         (((self.valve_pos as u32) * VALVE_DUTY_RANGE >> 16) + VALVE_MIN_PWM_DUTY) as u16
     }
 
     pub fn draw_graphs<D>(&self, display: &mut D)
-        where D: DrawTarget<Color = BinaryColor>,
+        where D: DrawTarget<Color=BinaryColor>,
               <D as DrawTarget>::Error: core::fmt::Debug
     {
         use embedded_graphics::{
-            mono_font::ascii::{FONT_4X6,FONT_5X7},
+            mono_font::ascii::{FONT_4X6, FONT_5X7},
             prelude::*,
-            //pixelcolor::BinaryColor,
-            text::Text
+            text::Text,
         };
         use ufmt::*;
 
@@ -94,45 +97,61 @@ impl State {
         let sm_text = MonoTextStyle::new(&FONT_4X6, BinaryColor::On);
         let mut sbuf = String::<32>::new();
 
-        uwrite!(sbuf, "T:{}   ", max6675::raw_to_f(*self.temp_history.peek().unwrap())).unwrap();
+        uwrite!(sbuf, "T:{}   ", max6675::raw_to_f(*self.temp_history.back().unwrap()/(TEMP_AVG_BUFFER_SIZE as u16))).unwrap();
         Text::new(&sbuf, Point::new(0, 18), lg_text)
             .draw(display).unwrap();
+        sbuf.clear();
         uwrite!(sbuf, "V:{}   ", ((self.valve_pos as u32) * 101) >> 16).unwrap();
         Text::new(&sbuf, Point::new(0, 50), lg_text)
             .draw(display).unwrap();
+        sbuf.clear();
 
-        let min_temp = self.temp_history.iter().min().unwrap();
-        let max_temp = self.temp_history.iter().max().unwrap();
-        let temp_range = max_temp - min_temp;
+        let mut min_temp = *self.temp_history.iter().min().unwrap();
+        let mut max_temp = *self.temp_history.iter().max().unwrap();
+        let mut temp_range = max_temp - min_temp;
+        const MIN_TEMP_RANGE: u16 = (GRAPH_HEIGHT * TEMP_AVG_BUFFER_SIZE) as u16;
+        if temp_range < MIN_TEMP_RANGE {
+            temp_range = MIN_TEMP_RANGE;
+            let avg_temp = (max_temp + min_temp) / 2;
+            min_temp = avg_temp - (MIN_TEMP_RANGE / 2);
+            max_temp = avg_temp + (MIN_TEMP_RANGE / 2);
+        }
 
-        uwrite!(sbuf, "MAX:{}   ", max6675::raw_to_f(*max_temp)).unwrap();
+        uwrite!(sbuf, "{}", max6675::raw_to_f(max_temp/(TEMP_AVG_BUFFER_SIZE as u16))).unwrap();
         Text::new(&sbuf, Point::new(0, 6), sm_text)
             .draw(display).unwrap();
-        uwrite!(sbuf, "MIN:{}   ", max6675::raw_to_f(*min_temp)).unwrap();
+        sbuf.clear();
+        uwrite!(sbuf, "{}", max6675::raw_to_f(min_temp/(TEMP_AVG_BUFFER_SIZE as u16))).unwrap();
         Text::new(&sbuf, Point::new(0, 30), sm_text)
             .draw(display).unwrap();
+        sbuf.clear();
         uwrite!(sbuf, "TGT:{}   ", max6675::raw_to_f(self.target_temp_raw)).unwrap();
-        Text::new(&sbuf, Point::new(96, 306), sm_text)
+        Text::new(&sbuf, Point::new(96, 30), sm_text)
             .draw(display).unwrap();
+        sbuf.clear();
 
-        if self.target_temp_raw >= *min_temp && self.target_temp_raw <= *max_temp {
+        if self.target_temp_raw >= min_temp && self.target_temp_raw <= max_temp {
             let display_value = (self.target_temp_raw - min_temp) * (GRAPH_HEIGHT as u16) / temp_range;
             Line::new(Point::new(0, display_value as i32),
-                      Point::new((DISPLAY_WIDTH-1) as i32, display_value as i32))
+                      Point::new((DISPLAY_WIDTH - 1) as i32, display_value as i32))
                 .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
                 .draw(display).unwrap();
         }
+        let t_graph_start = (DISPLAY_WIDTH - self.temp_history.len()) as i32;
         let t_graph_iter = self.temp_history.iter().enumerate()
             .map(|(i, t)| {
                 let display_value = (t - min_temp) * (GRAPH_HEIGHT as u16) / temp_range;
-                Pixel(Point::new(i as i32, display_value as i32), BinaryColor::On)
+                Pixel(Point::new(i as i32 + t_graph_start, display_value as i32), BinaryColor::On)
             });
         display.draw_iter(t_graph_iter).unwrap();
+
+        let v_graph_start = (DISPLAY_WIDTH - self.valve_history.len()) as i32;
         let v_graph_iter = self.valve_history.iter().enumerate()
             .map(|(i, v)| {
                 let divisor = u16::MAX / (GRAPH_HEIGHT as u16);
-                Pixel(Point::new(i as i32, (v / divisor) as i32), BinaryColor::On)
+                Pixel(Point::new(i as i32 + v_graph_start, (v / divisor) as i32), BinaryColor::On)
             });
         display.draw_iter(v_graph_iter).unwrap();
+
     }
 }

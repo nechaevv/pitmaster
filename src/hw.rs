@@ -25,3 +25,4 @@ pub type TempSensor = crate::max6675::TempMAX6675<Spi2Impl, TempSensorCSPin>;
 //Servo output - PA0
 pub type ServoPin = Pin<'A', 0, Alternate>;
 pub type ServoPwm = PwmHz<pac::TIM2, Tim2NoRemap, Ch<C1>, ServoPin>;
+pub type TickLed = Pin<'C', 13, Output>;
