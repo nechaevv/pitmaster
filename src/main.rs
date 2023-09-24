@@ -89,11 +89,12 @@ mod app {
         let temp_cs = gpiob.pb12.into_push_pull_output(&mut gpiob.crh);
         let temp_sensor: TempSensor = TempMAX6675::new(spi2, temp_cs);
 
-                        // Servo PWM
-                        let servo_pin: ServoPin = gpioa.pa0.into_alternate_push_pull(&mut gpioa.crl);
-                        let servo_pwm: ServoPwm = cx.device
-                            .TIM2
-                            .pwm_hz::<Tim2NoRemap, _, _>(servo_pin, &mut afio.mapr, 250.Hz(), &clocks);
+        // Servo PWM
+        let servo_pin: ServoPin = gpioa.pa0.into_alternate_push_pull(&mut gpioa.crl);
+        let mut servo_pwm: ServoPwm = cx.device
+            .TIM2
+            .pwm_hz::<Tim2NoRemap, _, _>(servo_pin, &mut afio.mapr, 250.Hz(), &clocks);
+        servo_pwm.enable(Channel::C1);
 
         let tick_led = gpioc.pc13.into_push_pull_output(&mut gpioc.crh);
         let state = State::new();
@@ -116,7 +117,9 @@ mod app {
         let tick::LocalResources { temp_sensor, state, servo_pwm, display, systick, tick_led, .. } = cx.local;
         let new_temp_raw = temp_sensor.read_temp_raw().unwrap();
         state.on_temp_read(new_temp_raw);
-        servo_pwm.set_duty(Channel::C1, state.valve_pwm_duty());
+        let max_duty = servo_pwm.get_max_duty() as u32;
+        let new_duty = state.valve_pwm_duty() as u32 * max_duty / (u16::MAX as u32);
+        servo_pwm.set_duty(Channel::C1, new_duty as u16);
         display.clear();
         state.draw_graphs::<Display>(display);
         display.flush().unwrap();
