@@ -77,7 +77,7 @@ impl State {
         (((self.valve_pos as u32) * VALVE_DUTY_RANGE >> 16) + VALVE_MIN_PWM_DUTY) as u16
     }
 
-    pub fn draw_graphs<D>(&self, display: &mut D)
+    pub fn draw<D>(&self, display: &mut D)
         where D: DrawTarget<Color=BinaryColor>,
               <D as DrawTarget>::Error: core::fmt::Debug
     {

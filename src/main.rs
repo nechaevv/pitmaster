@@ -14,33 +14,39 @@ mod app {
     use crate::hw::*;
     use embedded_hal::spi::MODE_0;
     use stm32f1xx_hal::{prelude::*, timer::{CounterMs, Event}, spi::Spi, timer::Tim2NoRemap, pac};
+    use stm32f1xx_hal::gpio::{ExtiPin, Edge};
     use stm32f1xx_hal::timer::Channel;
-    use crate::max6675::TempMAX6675;
+    use crate::max6675::{TempMAX6675, f_to_raw};
     use crate::pitmaster::State;
 
     #[shared]
-    struct Shared {}
+    struct Shared {
+        encoder_state: i8,
+    }
 
     #[local]
     struct Local {
-        systick: CounterMs<Systick>,
+        tick_tm: CounterMs<pac::TIM1>,
         servo_pwm: ServoPwm,
         display: Display,
         temp_sensor: TempSensor,
         state: State,
         tick_led: TickLed,
+        encoder_clk: EncoderClk,
+        encoder_dt: EncoderDt,
     }
 
     #[init]
-    fn init(cx: init::Context) -> (Shared, Local) {
+    fn init(mut cx: init::Context) -> (Shared, Local) {
         let mut flash = cx.device.FLASH.constrain();
         let rcc = cx.device.RCC.constrain();
         let clocks = rcc.cfgr.freeze(&mut flash.acr);
 
-        let mut delay = cx.device.TIM3.delay_us(&clocks);
-        let mut systick = cx.device.TIM1.counter_ms(&clocks);
-        systick.start(1.secs()).unwrap();
-        systick.listen(Event::Update);
+        let mut delay = cx.core.SYST.delay(&clocks);
+
+        let mut tick_tm = cx.device.TIM1.counter_ms(&clocks);
+        tick_tm.start(1.secs()).unwrap();
+        tick_tm.listen(Event::Update);
 
         let mut afio = cx.device.AFIO.constrain();
         let mut gpioa = cx.device.GPIOA.split();
@@ -97,33 +103,74 @@ mod app {
         servo_pwm.enable(Channel::C1);
 
         let tick_led = gpioc.pc13.into_push_pull_output(&mut gpioc.crh);
+        let mut encoder_clk = gpioc.pc14.into_floating_input(&mut gpioc.crh);
+        let encoder_dt = gpioc.pc15.into_floating_input(&mut gpioc.crh);
+        encoder_clk.make_interrupt_source(&mut afio);
+        encoder_clk.enable_interrupt(&mut cx.device.EXTI);
+        encoder_clk.trigger_on_edge(&mut cx.device.EXTI, Edge::Rising);
+
         let state = State::new();
 
         (
-            Shared {},
+            Shared {
+                encoder_state: 0i8
+            },
             Local {
-                systick,
+                tick_tm,
                 servo_pwm,
                 display,
                 temp_sensor,
                 state,
                 tick_led,
+                encoder_clk,
+                encoder_dt,
             }
         )
     }
 
-    #[task(binds = TIM1_UP, priority = 1, local = [systick, servo_pwm, temp_sensor, display, state, tick_led])]
-    fn tick(cx: tick::Context) {
-        let tick::LocalResources { temp_sensor, state, servo_pwm, display, systick, tick_led, .. } = cx.local;
+    const ENC_TEMP_INCREMENT: u16 = f_to_raw(50) - f_to_raw(45); //5 F
+
+    #[task(binds = TIM1_UP, priority = 1, local = [tick_tm, servo_pwm, temp_sensor, display, state, tick_led], shared = [encoder_state])]
+    fn tick(mut cx: tick::Context) {
+        let tick::LocalResources { temp_sensor, servo_pwm, display, tick_tm, tick_led, state, .. } = cx.local;
+        tick_tm.clear_interrupt(Event::Update);
+
+        // Handle encoder action
+        cx.shared.encoder_state.lock(|encoder_state| {
+            if *encoder_state > 0i8 {
+                state.target_temp_raw += ENC_TEMP_INCREMENT;
+                *encoder_state = 0i8;
+            }
+            if *encoder_state < 0i8 {
+                state.target_temp_raw -= ENC_TEMP_INCREMENT;
+                *encoder_state = 0i8;
+            }
+        });
+        // Read temperaure and run PID
         let new_temp_raw = temp_sensor.read_temp_raw().unwrap();
         state.on_temp_read(new_temp_raw);
+        // Update display
+        display.clear();
+        state.draw::<Display>(display);
+        display.flush().unwrap();
+        // Update servo
         let max_duty = servo_pwm.get_max_duty() as u32;
         let new_duty = state.valve_pwm_duty() as u32 * max_duty / (u16::MAX as u32);
         servo_pwm.set_duty(Channel::C1, new_duty as u16);
-        display.clear();
-        state.draw_graphs::<Display>(display);
-        display.flush().unwrap();
+
         tick_led.toggle();
-        systick.clear_interrupt(Event::Update);
+    }
+
+    #[task(binds = EXTI15_10, priority = 1, local = [encoder_clk, encoder_dt], shared = [encoder_state])]
+    fn encoder_step(mut cx: encoder_step::Context) {
+        cx.local.encoder_clk.clear_interrupt_pending_bit();
+        let direction = cx.local.encoder_dt.is_low();
+        cx.shared.encoder_state.lock(|encoder_state| {
+            if direction {
+                *encoder_state = 1;
+            } else {
+                *encoder_state = -1;
+            }
+        });
     }
 }

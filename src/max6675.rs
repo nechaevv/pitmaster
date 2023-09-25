@@ -36,11 +36,11 @@ impl<SPI, CS> TempMAX6675<SPI, CS>
 
 }
 
-pub fn raw_to_f(temp: u16) -> i16 {
+pub const fn raw_to_f(temp: u16) -> i16 {
     ((temp as i16) * 9 / 20) + 32
 }
 
-pub fn f_to_raw(temp_f: i16) -> u16 {
+pub const fn f_to_raw(temp_f: i16) -> u16 {
     ((temp_f - 32) * 20 / 9) as u16
 }
 /*
