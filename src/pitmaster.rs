@@ -6,23 +6,23 @@ use ringbuffer::{ConstGenericRingBuffer, RingBuffer, RingBufferExt, RingBufferWr
 use ufmt::uwrite;
 use crate::max6675;
 
-const TEMP_AVG_BUFFER_SIZE: usize = 32;
+const TEMP_AVG_BUFFER_SIZE: usize = 16;
 const DISPLAY_WIDTH: usize = 128;
 const DISPLAY_HEIGHT: usize = 64;
 const GRAPH_HEIGHT: usize = DISPLAY_HEIGHT / 2;
 const GRAPH_STEP_TICKS: u8 = 75;
 const P_TERM: i32 = 1;
-const D_TERM: i32 = 512;
+const D_TERM: i32 = 64;
 const VALVE_MIN_PWM_DUTY: u32 = 15700;
 const VALVE_MAX_PWM_DUTY: u32 = 37000;
 const VALVE_DUTY_RANGE: u32 = VALVE_MAX_PWM_DUTY - VALVE_MIN_PWM_DUTY;
 
 pub struct State {
     pub avg_buffer: ConstGenericRingBuffer<u16, TEMP_AVG_BUFFER_SIZE>,
+    pub errors: ConstGenericRingBuffer<i32, TEMP_AVG_BUFFER_SIZE>,
     pub temp_history: ConstGenericRingBuffer<u16, DISPLAY_WIDTH>,
     pub valve_history: ConstGenericRingBuffer<u16, DISPLAY_WIDTH>,
     pub valve_pos: u16,
-    pub error: i32,
     pub target_temp_raw: u16,
     pub graph_tick_cnt: u8,
 }
@@ -31,10 +31,10 @@ impl State {
     pub fn new() -> State {
         State {
             avg_buffer: ConstGenericRingBuffer::<u16, TEMP_AVG_BUFFER_SIZE>::new(),
+            errors: ConstGenericRingBuffer::<i32, TEMP_AVG_BUFFER_SIZE>::new(),
             temp_history: ConstGenericRingBuffer::<u16, DISPLAY_WIDTH>::new(),
             valve_history: ConstGenericRingBuffer::<u16, DISPLAY_WIDTH>::new(),
             valve_pos: u16::MAX,
-            error: 0,
             target_temp_raw: max6675::f_to_raw(226),
             graph_tick_cnt: GRAPH_STEP_TICKS,
         }
@@ -52,8 +52,12 @@ impl State {
         }
         // PID
         let error = (self.target_temp_raw as i32) * (TEMP_AVG_BUFFER_SIZE as i32) - t_avg;
-        let error_d = error - self.error;
-        self.error = error;
+        let error_d = if self.errors.is_empty() {
+            0
+        } else {
+            error - *self.errors.front().unwrap()
+        };
+        self.errors.push(error);
         let valve_d = (P_TERM * error + D_TERM * error_d) / (TEMP_AVG_BUFFER_SIZE as i32);
         if valve_d < -(self.valve_pos as i32) {
             self.valve_pos = 0;
