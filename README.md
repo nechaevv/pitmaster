@@ -20,9 +20,9 @@ rustup target add thumbv7m-none-eabi
 1. Connect STLINK-V2
 2. Run openocd session in another terminal (must be running for GDB to connect)
 ```bash
+# "set CPUID" option needed to flash knockoff board (non-genuine STM32)
 openocd -f interface/stlink.cfg -c "set CPUTAPID 0x2ba01477" -f target/stm32f1x.cfg
 ```
-"set CPUID" option needed to flash knockoff board (non-genuine STM32)
 3. Flash and run GDB session:
 ```bash
 cargo run -r
