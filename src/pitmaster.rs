@@ -6,13 +6,13 @@ use ringbuffer::{ConstGenericRingBuffer, RingBuffer, RingBufferExt, RingBufferWr
 use ufmt::uwrite;
 use crate::max6675;
 
-const TEMP_AVG_BUFFER_SIZE: usize = 4;
+const TEMP_AVG_BUFFER_SIZE: usize = 32;
 const DISPLAY_WIDTH: usize = 128;
 const DISPLAY_HEIGHT: usize = 64;
 const GRAPH_HEIGHT: usize = DISPLAY_HEIGHT / 2;
-const GRAPH_STEP_TICKS: u8 = 16;
-const P_TERM: i32 = 8;
-const D_TERM: i32 = 4096;
+const GRAPH_STEP_TICKS: u8 = 75;
+const P_TERM: i32 = 1;
+const D_TERM: i32 = 512;
 const VALVE_MIN_PWM_DUTY: u32 = 15700;
 const VALVE_MAX_PWM_DUTY: u32 = 37000;
 const VALVE_DUTY_RANGE: u32 = VALVE_MAX_PWM_DUTY - VALVE_MIN_PWM_DUTY;
@@ -112,8 +112,13 @@ impl State {
         if temp_range < MIN_TEMP_RANGE {
             temp_range = MIN_TEMP_RANGE;
             let avg_temp = (max_temp + min_temp) / 2;
-            min_temp = avg_temp - (MIN_TEMP_RANGE / 2);
             max_temp = avg_temp + (MIN_TEMP_RANGE / 2);
+            if avg_temp > MIN_TEMP_RANGE / 2 {
+                min_temp = avg_temp - (MIN_TEMP_RANGE / 2);
+            } else {
+                min_temp = 0;
+                temp_range = max_temp;
+            }
         }
 
         uwrite!(sbuf, "{}", max6675::raw_to_f(max_temp/(TEMP_AVG_BUFFER_SIZE as u16))).unwrap();

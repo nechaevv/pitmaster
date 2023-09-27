@@ -45,7 +45,7 @@ mod app {
         let mut delay = cx.core.SYST.delay(&clocks);
 
         let mut tick_tm = cx.device.TIM1.counter_ms(&clocks);
-        tick_tm.start(1.secs()).unwrap();
+        tick_tm.start(220.millis()).unwrap(); // 220 ms - min read interval for MAX6675
         tick_tm.listen(Event::Update);
 
         let mut afio = cx.device.AFIO.constrain();
@@ -146,7 +146,7 @@ mod app {
                 *encoder_state = 0i8;
             }
         });
-        // Read temperaure and run PID
+        // Read temperature and run PID
         let new_temp_raw = temp_sensor.read_temp_raw().unwrap();
         state.on_temp_read(new_temp_raw);
         // Update display
@@ -157,7 +157,6 @@ mod app {
         let max_duty = servo_pwm.get_max_duty() as u32;
         let new_duty = state.valve_pwm_duty() as u32 * max_duty / (u16::MAX as u32);
         servo_pwm.set_duty(Channel::C1, new_duty as u16);
-
         tick_led.toggle();
     }
 
