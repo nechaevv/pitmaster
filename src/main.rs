@@ -135,28 +135,35 @@ mod app {
         let tick::LocalResources { temp_sensor, servo_pwm, display, tick_tm, tick_led, state, .. } = cx.local;
         tick_tm.clear_interrupt(Event::Update);
 
+        let mut reset_error = false; // Reset error used to eliminate PID reaction on target temperature change
         // Handle encoder action
         cx.shared.encoder_state.lock(|encoder_state| {
             if *encoder_state > 0i8 {
                 state.target_temp_raw += ENC_TEMP_INCREMENT;
                 *encoder_state = 0i8;
+                reset_error = true;
             }
             if *encoder_state < 0i8 {
                 state.target_temp_raw -= ENC_TEMP_INCREMENT;
                 *encoder_state = 0i8;
+                reset_error = true;
             }
         });
         // Read temperature and run PID
         let new_temp_raw = temp_sensor.read_temp_raw().unwrap();
-        state.on_temp_read(new_temp_raw);
+        state.on_temp_read(new_temp_raw, reset_error);
         // Update display
         display.clear();
         state.draw::<Display>(display);
         display.flush().unwrap();
-        // Update servo
-        let max_duty = servo_pwm.get_max_duty() as u32;
-        let new_duty = state.valve_pwm_duty() as u32 * max_duty / (u16::MAX as u32);
-        servo_pwm.set_duty(Channel::C1, new_duty as u16);
+
+        if state.is_ready() {
+            // Update servo
+            let max_duty = servo_pwm.get_max_duty() as u32;
+            let new_duty = state.valve_pwm_duty() as u32 * max_duty / (u16::MAX as u32);
+            servo_pwm.set_duty(Channel::C1, new_duty as u16);
+        }
+
         tick_led.toggle();
     }
 

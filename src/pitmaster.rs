@@ -1,6 +1,8 @@
 use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::primitives::PrimitiveStyleBuilder;
 use embedded_graphics_core::pixelcolor::BinaryColor;
 use embedded_graphics_core::prelude::DrawTarget;
+use embedded_graphics_core::primitives::Rectangle;
 use heapless::String;
 use ringbuffer::{ConstGenericRingBuffer, RingBuffer, RingBufferExt, RingBufferWrite};
 use ufmt::uwrite;
@@ -39,12 +41,11 @@ impl State {
             graph_tick_cnt: GRAPH_STEP_TICKS,
         }
     }
-    pub fn on_temp_read(&mut self, new_temp_raw: u16) {
+    pub fn on_temp_read(&mut self, new_temp_raw: u16, reset_error: bool) {
         // average temperature
-        if self.avg_buffer.is_empty() {
-            self.avg_buffer.fill(new_temp_raw);
-        } else {
-            self.avg_buffer.push(new_temp_raw);
+        self.avg_buffer.push(new_temp_raw);
+        if !self.avg_buffer.is_full() {
+            return;
         }
         let mut t_avg: i32 = 0; // multiplied by avg buffer size to preserve precision
         for t in self.avg_buffer.iter() {
@@ -52,12 +53,16 @@ impl State {
         }
         // PID
         let error = (self.target_temp_raw as i32) * (TEMP_AVG_BUFFER_SIZE as i32) - t_avg;
-        let error_d = if self.errors.is_empty() {
-            0
+        if reset_error {
+            self.errors.fill(error);
         } else {
-            error - *self.errors.front().unwrap()
-        };
-        self.errors.push(error);
+            self.errors.push(error);
+        }
+        if !self.errors.is_full() {
+            return;
+        }
+        let error_d = error - *self.errors.front().unwrap();
+
         let valve_d = (P_TERM * error + D_TERM * error_d) / (TEMP_AVG_BUFFER_SIZE as i32);
         if valve_d < -(self.valve_pos as i32) {
             self.valve_pos = 0;
@@ -77,6 +82,9 @@ impl State {
             self.graph_tick_cnt += 1;
         }
     }
+    pub fn is_ready(&self) -> bool {
+        return self.errors.is_full()
+    }
     pub fn valve_pwm_duty(&self) -> u16 {
         (((self.valve_pos as u32) * VALVE_DUTY_RANGE >> 16) + VALVE_MIN_PWM_DUTY) as u16
     }
@@ -92,7 +100,8 @@ impl State {
         };
         use ufmt::*;
 
-        if self.temp_history.is_empty() {
+        if !self.is_ready() {
+            self.draw_startup(display);
             return;
         }
 
@@ -161,6 +170,55 @@ impl State {
                 Pixel(Point::new(i as i32 + v_graph_start, DISPLAY_HEIGHT as i32 - 1 - (*v as i32 / divisor)), BinaryColor::On)
             });
         display.draw_iter(v_graph_iter).unwrap();
+
+    }
+    pub fn draw_startup<D>(&self, display: &mut D)
+        where D: DrawTarget<Color=BinaryColor>,
+              <D as DrawTarget>::Error: core::fmt::Debug
+    {
+        use embedded_graphics::{
+            mono_font::ascii::FONT_5X7,
+            prelude::*,
+            text::Text,
+        };
+        use ufmt::*;
+
+        const PROGRESS_BAR_X_MIN: i32 = 10;
+        const PROGRESS_BAR_WIDTH: u32 = (DISPLAY_WIDTH - 20) as u32;
+        const PROGRESS_BAR_HEIGHT: u32 = 10;
+        const PROGRESS_BAR_Y_OFFSET: i32 = DISPLAY_HEIGHT as i32 / 2 - PROGRESS_BAR_HEIGHT as i32;
+        const PROGRESS_MAX: usize = 2 * TEMP_AVG_BUFFER_SIZE;
+
+        let outline_style = PrimitiveStyleBuilder::new()
+            .stroke_color(BinaryColor::On)
+            .stroke_width(1)
+            .fill_color(BinaryColor::Off)
+            .build();
+        let filled_style = PrimitiveStyleBuilder::new()
+            .stroke_color(BinaryColor::On)
+            .fill_color(BinaryColor::On)
+            .build();
+
+        let progress = (self.avg_buffer.len() + self.errors.len()) as u32;
+        let bar_width = (progress * PROGRESS_BAR_WIDTH) / PROGRESS_MAX as u32;
+        let percent = progress * 101 / PROGRESS_MAX as u32;
+
+        let bar_origin_point = Point::new(PROGRESS_BAR_X_MIN, PROGRESS_BAR_Y_OFFSET);
+        Rectangle::new(bar_origin_point, Size::new(PROGRESS_BAR_WIDTH, PROGRESS_BAR_HEIGHT))
+            .into_styled(outline_style)
+            .draw(display).unwrap();
+        Rectangle::new(bar_origin_point,Size::new(bar_width, PROGRESS_BAR_HEIGHT))
+            .into_styled(filled_style)
+            .draw(display).unwrap();
+
+        let mut sbuf = String::<32>::new();
+        let lg_text = MonoTextStyle::new(&FONT_5X7, BinaryColor::On);
+
+        uwrite!(sbuf,"{}%", percent).unwrap();
+        const TEXT_X: i32 = (DISPLAY_WIDTH / 2 - 6) as i32;
+        const TEXT_Y: i32 = PROGRESS_BAR_Y_OFFSET + PROGRESS_BAR_HEIGHT as i32 + 10;
+        Text::new(&sbuf, Point::new(TEXT_X, TEXT_Y), lg_text)
+            .draw(display).unwrap();
 
     }
 }
