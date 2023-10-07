@@ -29,3 +29,10 @@ cargo run -r
 ```
 4. type "c" to see program running
 5. ctrl+c and "q" quits GDB
+# Photos
+* Display
+![display](https://github.com/nechaevv/pitmaster/assets/464243/2c0bce9a-21a1-4389-a6fc-b5cfe2d8fd04)
+* Damper with servo
+![damper](https://github.com/nechaevv/pitmaster/assets/464243/68146786-1a70-4c4a-8561-b1b85201fbf2)
+* Overall setup
+![overview](https://github.com/nechaevv/pitmaster/assets/464243/2b59670f-2202-42f6-aea6-1561960b817e)
